@@ -23,6 +23,7 @@ from openfold.data import data_transforms
 from openfold.np import residue_constants
 from openfold.utils import rigid_utils as ru
 from data import utils as du
+from FoldDoF import to_backbone, to_bb_mode
 
 Rigid = ru.Rigid
 Rotation = ru.Rotation
@@ -35,6 +36,18 @@ DEFAULT_FRAMES = torch.tensor(residue_constants.restype_rigid_group_default_fram
 ATOM_MASK = torch.tensor(residue_constants.restype_atom14_mask)
 GROUP_IDX = torch.tensor(residue_constants.restype_atom14_to_rigid_group)
 
+
+def to_backbone_via_pep(trans, rots, to37: bool = True):
+    bb = to_backbone(rots, trans, mode=to_bb_mode.Pep_GlobalRots_GlobalTrans)
+    if to37:
+        # 0  1 2  3 4
+        # N CA C CB O
+        atom37 = torch.zeros((bb.shape[0], bb.shape[1], 37, 3), device=bb.device, dtype=bb.dtype)
+        atom37[:, :, :3] = bb[:, :, :3]
+        atom37[:, :, 4] = bb[:, :, 3]
+        return atom37
+    else:
+        return bb
 
 def to_atom37(trans, rots):
     num_batch, num_res, _ = trans.shape
@@ -234,6 +247,14 @@ def vector_projection(R_ab, P_n):
     a_x_b = torch.sum(R_ab * P_n, dim=-1)
     b_x_b = torch.sum(P_n * P_n, dim=-1)
     return R_ab - (a_x_b / b_x_b)[:, None] * P_n
+
+
+def transrot_to_backbone_via_pep(transrot_traj, res_mask, use_last_only: bool = False, to37: bool = True):
+    if use_last_only:
+        trans, rots = transrot_traj[-1]
+        return [to_backbone_via_pep(trans, rots, to37=to37).detach().cpu()]
+    else:
+        return [to_backbone_via_pep(trans, rots, to37=to37).detach().cpu() for trans, rots in transrot_traj]
 
 
 def transrot_to_atom37(transrot_traj, res_mask):

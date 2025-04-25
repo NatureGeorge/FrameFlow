@@ -162,6 +162,7 @@ class Interpolant:
             chain_idx=None,
             res_idx=None,
             verbose=False,
+            use_last_only: bool = False,
         ):
         res_mask = torch.ones(num_batch, num_res, device=self._device)
 
@@ -320,8 +321,12 @@ class Interpolant:
         prot_traj.append((pred_trans_1, pred_rotmats_1))
 
         # Convert trajectories to atom37.
+        """
         atom37_traj = all_atom.transrot_to_atom37(prot_traj, res_mask)
         clean_atom37_traj = all_atom.transrot_to_atom37(clean_traj, res_mask)
+        """
+        atom37_traj = all_atom.transrot_to_backbone_via_pep(prot_traj, res_mask, use_last_only=use_last_only, to37=True)
+        clean_atom37_traj = all_atom.transrot_to_backbone_via_pep(clean_traj, res_mask, use_last_only=use_last_only, to37=True)
         return atom37_traj, clean_atom37_traj, clean_traj
 
     def guidance(self, trans_t, rotmats_t, model_out, motif_mask, R_motif, trans_motif, Log_delta_R, delta_x, t, d_t, logs_traj):

@@ -106,8 +106,8 @@ class FlowModule(LightningModule):
             rotmats_t, gt_rotmats_1.type(torch.float32))
         if torch.any(torch.isnan(gt_rot_vf)):
             raise ValueError('NaN encountered in gt_rot_vf')
-        gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
-
+        #gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
+        gt_bb_atoms = all_atom.to_backbone_via_pep(gt_trans_1, gt_rotmats_1)[:, :, :3]
         # Timestep used for normalization.
         r3_t = noisy_batch['r3_t']
         so3_t = noisy_batch['so3_t']
@@ -125,7 +125,8 @@ class FlowModule(LightningModule):
             raise ValueError('NaN encountered in pred_rots_vf')
 
         # Backbone atom loss
-        pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        #pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
         gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         loss_denom = torch.sum(loss_mask, dim=-1) * 3
@@ -208,6 +209,7 @@ class FlowModule(LightningModule):
             diffuse_mask=diffuse_mask,
             chain_idx=batch['chain_idx'],
             res_idx=batch['res_idx'],
+            use_last_only=True,
         )
         samples = atom37_traj[-1].numpy()
         batch_metrics = []
@@ -366,7 +368,8 @@ class FlowModule(LightningModule):
             trans_1 = batch['trans_1']
             rotmats_1 = batch['rotmats_1']
             diffuse_mask = batch['diffuse_mask']
-            true_bb_pos = all_atom.atom37_from_trans_rot(trans_1, rotmats_1, 1 - diffuse_mask)
+            #true_bb_pos = all_atom.atom37_from_trans_rot(trans_1, rotmats_1, 1 - diffuse_mask)
+            true_bb_pos = all_atom.to_backbone_via_pep(trans_1, rotmats_1, to37=False)
             true_bb_pos = true_bb_pos[..., :3, :].reshape(-1, 3).cpu().numpy()
             _, sample_length, _ = trans_1.shape
             sample_dirs = [os.path.join(

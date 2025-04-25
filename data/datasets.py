@@ -8,10 +8,12 @@ import random
 
 from torch.utils.data import Dataset
 from data import utils as du
+from data import residue_constants
 from openfold.data import data_transforms
 from openfold.utils import rigid_utils
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
+from FoldDoF import to_rottrans
 
 
 def _rog_filter(df, quantile):
@@ -110,6 +112,65 @@ def _process_csv_row(processed_file_path):
     }
 
 
+def _process_csv_row_for_global_pep(processed_file_path):
+    processed_feats = du.read_pkl(processed_file_path)
+    chain_idx = processed_feats['chain_index']
+    res_idx = processed_feats['residue_index']
+    all_chain_idx = np.unique(chain_idx).tolist()
+    if len(all_chain_idx) > 1:
+        # Randomize chain indices.
+        # see: https://github.com/jasonkyuyim/se3_diffusion/issues/10
+        # 'This feature and randomization is important when training on complexes.'
+        # new_chain_idx = np.zeros_like(res_idx)
+        # shuffled_chain_idx = np.array(random.sample(all_chain_idx, len(all_chain_idx))) - np.min(all_chain_idx) + 1
+        raise NotImplementedError('TODO.')
+    else:
+        new_chain_idx = chain_idx
+    
+    atom_order = [residue_constants.atom_order['N'], residue_constants.atom_order['CA'], residue_constants.atom_order['C'], residue_constants.atom_order['O']]
+    
+    for idx, chain_id in enumerate(all_chain_idx):
+        chain_mask = (processed_feats['chain_index'] == chain_id)
+        obs_mask = processed_feats['bb_mask'].astype(np.bool_)
+        std_mask = processed_feats['aatype'] < 20
+        if not std_mask[chain_mask].any(): continue
+        use_mask = chain_mask & obs_mask & std_mask
+        obs_author_residue_number = res_idx[use_mask]
+
+        assert std_mask[chain_mask & obs_mask].all(), f"Tempoary discard chains with non-standard amino acid residues. (from: {processed_file_path})"
+        assert np.unique(obs_author_residue_number).shape[0] == obs_author_residue_number.shape[0], f"Tempoary discard chains with author insertion codes. TODO: regenerate pkl and use residue_number instead of author_residue_number for `residue_index`! (from: {processed_file_path})"
+        assert tuple(np.unique(obs_author_residue_number[1:] - obs_author_residue_number[:-1]).tolist()) == (1,), f"Tempoary discard chains with potential missing residues. TODO: regenerate pkl and use residue_number instead of author_residue_number for `residue_index`! (from: {processed_file_path})"
+        
+        # Re-number residue indices for each chain such that it starts from 1.
+        new_res_idx = obs_author_residue_number - obs_author_residue_number[0] + 1
+        aatype = torch.tensor(processed_feats['aatype'][use_mask]).long()
+        
+        bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order])
+        bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order])
+        rotmats_1, trans_1, _, pep_mask_1, _ = to_rottrans(bb_coords, bb_mask)
+        #res_plddt = processed_feats['b_factors'][use_mask][:, 1]
+
+        assert pep_mask_1.all(), f"Tempoary discard chains with missing pep frames. (from: {processed_file_path})"
+        
+        # Shuffle chain_index
+        # ...
+
+        break
+    
+    if torch.isnan(trans_1).any() or torch.isnan(rotmats_1).any():
+        raise ValueError(f'Found NaNs in {processed_file_path}')
+    
+    return {
+        #'res_plddt': res_plddt,
+        'aatype': aatype,
+        'rotmats_1': rotmats_1,
+        'trans_1': trans_1,
+        'res_mask': pep_mask_1.int(),
+        'chain_idx': new_chain_idx,
+        'res_idx': new_res_idx,
+    }
+
+
 def _add_plddt_mask(feats, plddt_threshold):
     feats['plddt_mask'] = torch.tensor(
         feats['res_plddt'] > plddt_threshold).int()
@@ -199,7 +260,7 @@ class BaseDataset(Dataset):
         use_cache = seq_len > self._dataset_cfg.cache_num_res
         if use_cache and path in self._cache:
             return self._cache[path]
-        processed_row = _process_csv_row(path)
+        processed_row = _process_csv_row_for_global_pep(path) #_process_csv_row(path)
         if use_cache:
             self._cache[path] = processed_row
         return processed_row
