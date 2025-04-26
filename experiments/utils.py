@@ -175,16 +175,18 @@ def get_sampled_mask(contigs, length, rng=None, num_tries=1000000):
     return sampled_mask, sampled_mask_length, inpaint_chains
 
 
-def dataset_creation(dataset_class, cfg, task):
+def dataset_creation(dataset_class, cfg, task, bb_repr):
     train_dataset = dataset_class(
         dataset_cfg=cfg,
         task=task,
         is_training=True,
+        bb_repr=bb_repr,
     ) 
     eval_dataset = dataset_class(
         dataset_cfg=cfg,
         task=task,
         is_training=False,
+        bb_repr=bb_repr,
     ) 
     return train_dataset, eval_dataset
 

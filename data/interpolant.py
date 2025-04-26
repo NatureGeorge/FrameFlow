@@ -32,12 +32,13 @@ def _rots_diffuse_mask(rotmats_t, rotmats_1, diffuse_mask):
 
 class Interpolant:
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, bb_repr):
         self._cfg = cfg
         self._rots_cfg = cfg.rots
         self._trans_cfg = cfg.trans
         self._sample_cfg = cfg.sampling
         self._igso3 = None
+        self._bb_repr = bb_repr
 
     @property
     def igso3(self):
@@ -321,12 +322,12 @@ class Interpolant:
         prot_traj.append((pred_trans_1, pred_rotmats_1))
 
         # Convert trajectories to atom37.
-        """
-        atom37_traj = all_atom.transrot_to_atom37(prot_traj, res_mask)
-        clean_atom37_traj = all_atom.transrot_to_atom37(clean_traj, res_mask)
-        """
-        atom37_traj = all_atom.transrot_to_backbone_via_pep(prot_traj, res_mask, use_last_only=use_last_only, to37=True)
-        clean_atom37_traj = all_atom.transrot_to_backbone_via_pep(clean_traj, res_mask, use_last_only=use_last_only, to37=True)
+        if self._bb_repr == 'original':
+            atom37_traj = all_atom.transrot_to_atom37(prot_traj, res_mask)
+            clean_atom37_traj = all_atom.transrot_to_atom37(clean_traj, res_mask)
+        else:
+            atom37_traj = all_atom.transrot_to_backbone_via_pep(prot_traj, res_mask, use_last_only=use_last_only, to37=True)
+            clean_atom37_traj = all_atom.transrot_to_backbone_via_pep(clean_traj, res_mask, use_last_only=use_last_only, to37=True)
         return atom37_traj, clean_atom37_traj, clean_traj
 
     def guidance(self, trans_t, rotmats_t, model_out, motif_mask, R_motif, trans_motif, Log_delta_R, delta_x, t, d_t, logs_traj):

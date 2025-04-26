@@ -20,6 +20,8 @@ data:
     max_batch_size: 80
     max_num_res_squared: 400_000
 
+bb_repr: original
+
 interpolant:
   min_t: 1e-2
 

@@ -13,7 +13,7 @@ from openfold.data import data_transforms
 from openfold.utils import rigid_utils
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
-from FoldDoF import to_rottrans
+from folddof import to_rottrans
 
 
 def _rog_filter(df, quantile):
@@ -142,12 +142,13 @@ def _process_csv_row_for_global_pep(processed_file_path):
         assert tuple(np.unique(obs_author_residue_number[1:] - obs_author_residue_number[:-1]).tolist()) == (1,), f"Tempoary discard chains with potential missing residues. TODO: regenerate pkl and use residue_number instead of author_residue_number for `residue_index`! (from: {processed_file_path})"
         
         # Re-number residue indices for each chain such that it starts from 1.
-        new_res_idx = obs_author_residue_number - obs_author_residue_number[0] + 1
+        new_res_idx = np.arange(1, obs_author_residue_number.shape[0]+1) # obs_author_residue_number - obs_author_residue_number[0] + 1
         aatype = torch.tensor(processed_feats['aatype'][use_mask]).long()
         
-        bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order])
-        bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order])
-        rotmats_1, trans_1, _, pep_mask_1, _ = to_rottrans(bb_coords, bb_mask)
+        bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order]).to(dtype=torch.float)
+        bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order]).to(dtype=torch.bool)
+        rotmats_1, trans_1, _, pep_mask_1, _ = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1))
+        rotmats_1 = rotmats_1.numpy(); trans_1 = trans_1.numpy(); pep_mask_1 = pep_mask_1.numpy()
         #res_plddt = processed_feats['b_factors'][use_mask][:, 1]
 
         assert pep_mask_1.all(), f"Tempoary discard chains with missing pep frames. (from: {processed_file_path})"
@@ -193,10 +194,12 @@ class BaseDataset(Dataset):
             dataset_cfg,
             is_training,
             task,
+            bb_repr,
         ):
         self._log = logging.getLogger(__name__)
         self._is_training = is_training
         self._dataset_cfg = dataset_cfg
+        self._bb_repr = bb_repr
         self.task = task
         self.raw_csv = pd.read_csv(self.dataset_cfg.csv_path)
         metadata_csv = self._filter_metadata(self.raw_csv)
@@ -260,7 +263,10 @@ class BaseDataset(Dataset):
         use_cache = seq_len > self._dataset_cfg.cache_num_res
         if use_cache and path in self._cache:
             return self._cache[path]
-        processed_row = _process_csv_row_for_global_pep(path) #_process_csv_row(path)
+        if self._bb_repr == 'original':
+            processed_row = _process_csv_row(path)
+        else:
+            processed_row = _process_csv_row_for_global_pep(path)
         if use_cache:
             self._cache[path] = processed_row
         return processed_row

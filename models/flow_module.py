@@ -31,12 +31,13 @@ class FlowModule(LightningModule):
         self._model_cfg = cfg.model
         self._data_cfg = cfg.data
         self._interpolant_cfg = cfg.interpolant
+        self._bb_repr = cfg.bb_repr
 
         # Set-up vector field prediction model
         self.model = FlowModel(cfg.model)
 
         # Set-up interpolant
-        self.interpolant = Interpolant(cfg.interpolant)
+        self.interpolant = Interpolant(cfg.interpolant, self._bb_repr)
 
         self.validation_epoch_metrics = []
         self.validation_epoch_samples = []
@@ -106,8 +107,10 @@ class FlowModule(LightningModule):
             rotmats_t, gt_rotmats_1.type(torch.float32))
         if torch.any(torch.isnan(gt_rot_vf)):
             raise ValueError('NaN encountered in gt_rot_vf')
-        #gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
-        gt_bb_atoms = all_atom.to_backbone_via_pep(gt_trans_1, gt_rotmats_1)[:, :, :3]
+        if self._bb_repr == 'original':
+            gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
+        else:
+            gt_bb_atoms = all_atom.to_backbone_via_pep(gt_trans_1, gt_rotmats_1)[:, :, :3]
         # Timestep used for normalization.
         r3_t = noisy_batch['r3_t']
         so3_t = noisy_batch['so3_t']
@@ -125,8 +128,10 @@ class FlowModule(LightningModule):
             raise ValueError('NaN encountered in pred_rots_vf')
 
         # Backbone atom loss
-        #pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
-        pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        if self._bb_repr == 'original':
+            pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        else:
+            pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
         gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         loss_denom = torch.sum(loss_mask, dim=-1) * 3
@@ -356,7 +361,7 @@ class FlowModule(LightningModule):
     def predict_step(self, batch, batch_idx):
         del batch_idx # Unused
         device = f'cuda:{torch.cuda.current_device()}'
-        interpolant = Interpolant(self._infer_cfg.interpolant) 
+        interpolant = Interpolant(self._infer_cfg.interpolant, self._bb_repr) 
         interpolant.set_device(device)
 
         sample_ids = batch['sample_id'].squeeze().tolist()
@@ -368,8 +373,10 @@ class FlowModule(LightningModule):
             trans_1 = batch['trans_1']
             rotmats_1 = batch['rotmats_1']
             diffuse_mask = batch['diffuse_mask']
-            #true_bb_pos = all_atom.atom37_from_trans_rot(trans_1, rotmats_1, 1 - diffuse_mask)
-            true_bb_pos = all_atom.to_backbone_via_pep(trans_1, rotmats_1, to37=False)
+            if self._bb_repr == 'original':
+                true_bb_pos = all_atom.atom37_from_trans_rot(trans_1, rotmats_1, 1 - diffuse_mask)
+            else:
+                true_bb_pos = all_atom.to_backbone_via_pep(trans_1, rotmats_1, to37=False)
             true_bb_pos = true_bb_pos[..., :3, :].reshape(-1, 3).cpu().numpy()
             _, sample_length, _ = trans_1.shape
             sample_dirs = [os.path.join(

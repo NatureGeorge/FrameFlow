@@ -23,7 +23,7 @@ from openfold.data import data_transforms
 from openfold.np import residue_constants
 from openfold.utils import rigid_utils as ru
 from data import utils as du
-from FoldDoF import to_backbone, to_bb_mode
+from folddof import to_backbone, to_bb_mode
 
 Rigid = ru.Rigid
 Rotation = ru.Rotation

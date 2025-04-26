@@ -38,10 +38,10 @@ class Experiment:
     def _setup_dataset(self):
         if self._data_cfg.dataset == 'scope':
             self._train_dataset, self._valid_dataset = eu.dataset_creation(
-                ScopeDataset, self._cfg.scope_dataset, self._task)
+                ScopeDataset, self._cfg.scope_dataset, self._task, self._cfg.bb_repr)
         elif self._data_cfg.dataset == 'pdb':
             self._train_dataset, self._valid_dataset = eu.dataset_creation(
-                PdbDataset, self._cfg.pdb_dataset, self._task)
+                PdbDataset, self._cfg.pdb_dataset, self._task, self._cfg.bb_repr)
         else:
             raise ValueError(f'Unrecognized dataset {self._data_cfg.dataset}') 
         
