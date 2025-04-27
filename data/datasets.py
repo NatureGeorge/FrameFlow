@@ -142,13 +142,13 @@ def _process_csv_row_for_global_pep(processed_file_path):
         assert tuple(np.unique(obs_author_residue_number[1:] - obs_author_residue_number[:-1]).tolist()) == (1,), f"Tempoary discard chains with potential missing residues. TODO: regenerate pkl and use residue_number instead of author_residue_number for `residue_index`! (from: {processed_file_path})"
         
         # Re-number residue indices for each chain such that it starts from 1.
-        new_res_idx = np.arange(1, obs_author_residue_number.shape[0]+1) # obs_author_residue_number - obs_author_residue_number[0] + 1
+        new_res_idx = np.arange(1, obs_author_residue_number.shape[0]+2) # obs_author_residue_number - obs_author_residue_number[0] + 1
         aatype = torch.tensor(processed_feats['aatype'][use_mask]).long()
         
         bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order]).to(dtype=torch.float)
         bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order]).to(dtype=torch.bool)
         rotmats_1, trans_1, _, pep_mask_1, _ = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1))
-        rotmats_1 = rotmats_1.numpy(); trans_1 = trans_1.numpy(); pep_mask_1 = pep_mask_1.numpy()
+        #rotmats_1 = rotmats_1.numpy(); trans_1 = trans_1.numpy(); pep_mask_1 = pep_mask_1.numpy()
         #res_plddt = processed_feats['b_factors'][use_mask][:, 1]
 
         assert pep_mask_1.all(), f"Tempoary discard chains with missing pep frames. (from: {processed_file_path})"
@@ -163,11 +163,12 @@ def _process_csv_row_for_global_pep(processed_file_path):
     
     return {
         #'res_plddt': res_plddt,
-        'aatype': aatype,
+        #'aatype': aatype,
         'rotmats_1': rotmats_1,
         'trans_1': trans_1,
         'res_mask': pep_mask_1.int(),
-        'chain_idx': new_chain_idx,
+        '_res_mask': pep_mask_1[1:].int(),
+        #'chain_idx': new_chain_idx,
         'res_idx': new_res_idx,
     }
 
@@ -373,7 +374,7 @@ class ScopeDataset(BaseDataset):
             raw_csv,
             filter_cfg.min_num_res,
             filter_cfg.max_num_res
-        )
+        ).reset_index(drop=True)
         data_csv['oligomeric_detail'] = 'monomeric'
         return data_csv
 

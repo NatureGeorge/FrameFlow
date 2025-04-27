@@ -95,9 +95,13 @@ class FlowModule(LightningModule):
     def model_step(self, noisy_batch: Any):
         training_cfg = self._exp_cfg.training
         loss_mask = noisy_batch['res_mask'] * noisy_batch['diffuse_mask']
+        
+        _loss_mask = noisy_batch['_res_mask'] if '_res_mask' in noisy_batch else loss_mask
+        assert noisy_batch['diffuse_mask'].to(dtype=torch.bool).all()
+        
         if torch.any(torch.sum(loss_mask, dim=-1) < 1):
             raise ValueError('Empty batch encountered')
-        num_batch, num_res = loss_mask.shape
+        num_batch, num_res = _loss_mask.shape
 
         # Ground truth labels
         gt_trans_1 = noisy_batch['trans_1']
@@ -135,10 +139,11 @@ class FlowModule(LightningModule):
         gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         loss_denom = torch.sum(loss_mask, dim=-1) * 3
+        _loss_denom = torch.sum(_loss_mask, dim=-1) * 3
         bb_atom_loss = torch.sum(
-            (gt_bb_atoms - pred_bb_atoms) ** 2 * loss_mask[..., None, None],
+            (gt_bb_atoms - pred_bb_atoms) ** 2 * _loss_mask[..., None, None],
             dim=(-1, -2, -3)
-        ) / loss_denom
+        ) / _loss_denom
 
         # Translation VF loss
         trans_error = (gt_trans_1 - pred_trans_1) / r3_norm_scale * training_cfg.trans_scale
@@ -163,9 +168,9 @@ class FlowModule(LightningModule):
         pred_pair_dists = torch.linalg.norm(
             pred_flat_atoms[:, :, None, :] - pred_flat_atoms[:, None, :, :], dim=-1)
 
-        flat_loss_mask = torch.tile(loss_mask[:, :, None], (1, 1, 3))
+        flat_loss_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
         flat_loss_mask = flat_loss_mask.reshape([num_batch, num_res*3])
-        flat_res_mask = torch.tile(loss_mask[:, :, None], (1, 1, 3))
+        flat_res_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
         flat_res_mask = flat_res_mask.reshape([num_batch, num_res*3])
 
         gt_pair_dists = gt_pair_dists * flat_loss_mask[..., None]
@@ -200,9 +205,9 @@ class FlowModule(LightningModule):
         }
 
     def validation_step(self, batch: Any, batch_idx: int):
-        res_mask = batch['res_mask']
-        self.interpolant.set_device(res_mask.device)
-        num_batch, num_res = res_mask.shape
+        res_idx = batch['res_idx']
+        self.interpolant.set_device(res_idx.device)
+        num_batch, num_res = res_idx.shape
         diffuse_mask = batch['diffuse_mask']
         csv_idx = batch['csv_idx']
         atom37_traj, _, _ = self.interpolant.sample(
@@ -212,8 +217,8 @@ class FlowModule(LightningModule):
             trans_1=batch['trans_1'],
             rotmats_1=batch['rotmats_1'],
             diffuse_mask=diffuse_mask,
-            chain_idx=batch['chain_idx'],
-            res_idx=batch['res_idx'],
+            #chain_idx=batch['chain_idx'],
+            res_idx=res_idx,
             use_last_only=True,
         )
         samples = atom37_traj[-1].numpy()
