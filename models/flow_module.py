@@ -410,11 +410,11 @@ class FlowModule(LightningModule):
             if 'aatype' in batch:
                 aatype = du.to_numpy(batch['aatype'].long())[0]
             else:
-                aatype = np.zeros(sample_length, dtype=int)
+                aatype = np.zeros(bb_traj[-1].shape[0], dtype=int)
             _ = eu.save_traj(
                 bb_traj[-1],
                 bb_traj,
-                np.flip(du.to_numpy(torch.concat(model_traj, dim=0)), axis=0),
+                du.to_numpy(torch.concat(model_traj, dim=0)), #np.flip(, axis=0),
                 du.to_numpy(diffuse_mask)[0],
                 output_dir=sample_dir,
                 aatype=aatype,

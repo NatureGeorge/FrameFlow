@@ -3,6 +3,8 @@ defaults:
   - base
   - _self_
 
+bb_repr: original
+
 inference:
 
   predict_dir: ./inference_outputs/
