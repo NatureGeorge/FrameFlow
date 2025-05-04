@@ -480,7 +480,7 @@ def rot_mult(mat_1: torch.Tensor, mat_2: torch.Tensor) -> torch.Tensor:
     return torch.einsum("...ij,...jk->...ik", mat_1, mat_2)
 
 
-def calc_rot_vf(mat_t: torch.Tensor, mat_1: torch.Tensor) -> torch.Tensor:
+def calc_rot_vf(mat_t: torch.Tensor, mat_1: torch.Tensor, rotmat_repr = False) -> torch.Tensor:
     """
     Computes the vector field Log_{mat_t}(mat_1).
 
@@ -491,7 +491,11 @@ def calc_rot_vf(mat_t: torch.Tensor, mat_1: torch.Tensor) -> torch.Tensor:
     Returns:
         Rotation vector representing the vector field.
     """
-    return rotmat_to_rotvec(rot_mult(rot_transpose(mat_t), mat_1))
+    ret = rot_mult(rot_transpose(mat_t), mat_1)
+    if rotmat_repr:
+        return ret.flatten(start_dim=-2, end_dim=-1)
+    else:
+        return rotmat_to_rotvec(ret)
 
 
 def geodesic_t(t: float, mat: torch.Tensor, base_mat: torch.Tensor, rot_vf=None) -> torch.Tensor:

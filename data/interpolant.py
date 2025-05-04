@@ -7,6 +7,8 @@ from data import all_atom
 import copy
 from torch import autograd
 from motif_scaffolding import twisting
+import roma
+import folddof
 
 
 def _centered_gaussian(num_batch, num_res, device):
@@ -32,13 +34,14 @@ def _rots_diffuse_mask(rotmats_t, rotmats_1, diffuse_mask):
 
 class Interpolant:
 
-    def __init__(self, cfg, bb_repr):
+    def __init__(self, cfg, bb_repr, relative_pep_trans):
         self._cfg = cfg
         self._rots_cfg = cfg.rots
         self._trans_cfg = cfg.trans
         self._sample_cfg = cfg.sampling
         self._igso3 = None
         self._bb_repr = bb_repr
+        self._relative_pep_trans = relative_pep_trans
 
     @property
     def igso3(self):
@@ -55,9 +58,9 @@ class Interpolant:
         t = torch.rand(num_batch, device=self._device)
         return t * (1 - 2*self._cfg.min_t) + self._cfg.min_t
 
-    def _corrupt_trans(self, trans_1, t, res_mask, diffuse_mask):
+    def _corrupt_trans(self, trans_1, t, res_mask, diffuse_mask, re_scale = 1.):
         trans_nm_0 = _centered_gaussian(*res_mask.shape, self._device)
-        trans_0 = trans_nm_0 * du.NM_TO_ANG_SCALE
+        trans_0 = trans_nm_0 * du.NM_TO_ANG_SCALE * re_scale
         trans_t = (1 - t[..., None]) * trans_0 + t[..., None] * trans_1
         trans_t = _trans_diffuse_mask(trans_t, trans_1, diffuse_mask)
         return trans_t * res_mask[..., None]
@@ -71,7 +74,14 @@ class Interpolant:
         noisy_rotmats = noisy_rotmats.reshape(num_batch, num_res, 3, 3)
         rotmats_0 = torch.einsum(
             "...ij,...jk->...ik", rotmats_1, noisy_rotmats)
-        rotmats_t = so3_utils.geodesic_t(t[..., None], rotmats_1, rotmats_0)
+        if self._cfg.rots.slerp:
+            rotmats_t = roma.unitquat_to_rotmat(folddof.utils.unitquat_slerp_fast(
+                roma.rotmat_to_unitquat(rotmats_0),
+                roma.rotmat_to_unitquat(rotmats_1),
+                t.expand(-1, num_res),
+                align_batch=True))
+        else:
+            rotmats_t = so3_utils.geodesic_t(t[..., None], rotmats_1, rotmats_0)
         identity = torch.eye(3, device=self._device)
         rotmats_t = (
             rotmats_t * res_mask[..., None, None]
@@ -118,6 +128,21 @@ class Interpolant:
         if torch.any(torch.isnan(rotmats_t)):
             raise ValueError('NaN in rotmats_t during corruption')
         noisy_batch['rotmats_t'] = rotmats_t
+
+        if self._trans_cfg.corrupt and self._relative_pep_trans:
+            # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+            loc_ca_ia1_wrt_n_ia1_1 = batch['loc_ca_ia1_wrt_n_ia1_1']
+            loc_ca_ia1_wrt_n_ia1_t = self._corrupt_trans(
+                loc_ca_ia1_wrt_n_ia1_1, r3_t, batch['_res_mask'], diffuse_mask[:, 1:], re_scale=0.1)
+            trans_t = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(
+                    rotmats_t.transpose(0, 1), 
+                    loc_ca_ia1_wrt_n_ia1_t.transpose(0, 1), 
+                )[0].transpose(0, 1)
+            #node_mask = res_mask[..., None]
+            #trans_t = trans_t - ((trans_t * node_mask).sum(dim=1) / torch.clamp(node_mask.sum(dim=1), min=1.0)).unsqueeze(1)
+        
+            noisy_batch['trans_t'] = trans_t
+
         return noisy_batch
     
     def rot_sample_kappa(self, t):
@@ -145,8 +170,15 @@ class Interpolant:
         else:
             raise ValueError(
                 f'Unknown sample schedule {self._rots_cfg.sample_schedule}')
-        return so3_utils.geodesic_t(
-            scaling * d_t, rotmats_1, rotmats_t)
+        if self._cfg.rots.slerp:
+            return roma.unitquat_to_rotmat(folddof.utils.unitquat_slerp_fast(
+                roma.rotmat_to_unitquat(rotmats_t),
+                roma.rotmat_to_unitquat(rotmats_1),
+                scaling * d_t,
+                align_batch=True))
+        else:
+            return so3_utils.geodesic_t(
+                scaling * d_t, rotmats_1, rotmats_t)        
 
     def sample(
             self,
@@ -168,11 +200,18 @@ class Interpolant:
         res_mask = torch.ones(num_batch, num_res, device=self._device)
 
         # Set-up initial prior samples
+        if rotmats_0 is None:
+            rotmats_0 = _uniform_so3(num_batch, num_res, self._device)
         if trans_0 is None:
             trans_0 = _centered_gaussian(
                 num_batch, num_res, self._device) * du.NM_TO_ANG_SCALE
-        if rotmats_0 is None:
-            rotmats_0 = _uniform_so3(num_batch, num_res, self._device)
+            if self._relative_pep_trans:
+                # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+                loc_ca_ia1_wrt_n_ia1_0 = (trans_0[:, 1:] / (du.NM_TO_ANG_SCALE * 100)) + (torch.tensor(folddof.data.DEF_LOC['ca_ia1_is_trans'], dtype=trans_0.dtype, device=trans_0.device) - torch.tensor(folddof.data.DEF_LOC['n_ia1'], dtype=trans_0.dtype, device=trans_0.device))
+                trans_0 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(rotmats_0.transpose(0, 1), loc_ca_ia1_wrt_n_ia1_0.transpose(0, 1))[0].transpose(0, 1)
+                #trans_0 = trans_0 - trans_0.mean(dim=1, keepdim=True)
+            else:
+                loc_ca_ia1_wrt_n_ia1_0 = None
         if res_idx is None:
             res_idx = torch.arange(
                 num_res,
@@ -219,10 +258,11 @@ class Interpolant:
         # Set-up time
         if num_timesteps is None:
             num_timesteps = self._sample_cfg.num_timesteps
-        ts = torch.linspace(self._cfg.min_t, 1.0, num_timesteps)
+        ts = torch.linspace(self._cfg.min_t, 1.0, num_timesteps, device=self._device)
         t_1 = ts[0]
 
         prot_traj = [(trans_0, rotmats_0)]
+        loc_ca_ia1_wrt_n_ia1_traj = [loc_ca_ia1_wrt_n_ia1_0]
         clean_traj = []
         for i, t_2 in enumerate(ts[1:]):
             if verbose: # and i % 1 == 0:
@@ -230,6 +270,7 @@ class Interpolant:
                 print(torch.cuda.mem_get_info(trans_0.device), torch.cuda.memory_allocated(trans_0.device))
             # Run model.
             trans_t_1, rotmats_t_1 = prot_traj[-1]
+            loc_ca_ia1_wrt_n_ia1_t_1 = loc_ca_ia1_wrt_n_ia1_traj[-1]
             if self._trans_cfg.corrupt:
                 batch['trans_t'] = trans_t_1
             else:
@@ -263,6 +304,7 @@ class Interpolant:
             # Process model output.
             pred_trans_1 = model_out['pred_trans']
             pred_rotmats_1 = model_out['pred_rotmats']
+            pred_loc_ca_ia1_wrt_n_ia1_1 = model_out['pred_loc_ca_ia1_wrt_n_ia1']
             clean_traj.append(
                 (pred_trans_1.detach().cpu(), pred_rotmats_1.detach().cpu())
             )
@@ -276,21 +318,34 @@ class Interpolant:
                     batch['trans_sc'] = pred_trans_1
 
             # Take reverse step
+            if not self._relative_pep_trans:
+                trans_t_2 = self._trans_euler_step(
+                    d_t, t_1, pred_trans_1, trans_t_1)
+                if trans_potential is not None:
+                    with torch.inference_mode(False):
+                        grad_pred_trans_1 = pred_trans_1.clone().detach().requires_grad_(True)
+                        pred_trans_potential = autograd.grad(outputs=trans_potential(grad_pred_trans_1), inputs=grad_pred_trans_1)[0]
+                    if self._trans_cfg.potential_t_scaling:
+                        trans_t_2 -= t_1 / (1 - t_1) * pred_trans_potential * d_t
+                    else:
+                        trans_t_2 -= pred_trans_potential * d_t
             
-            trans_t_2 = self._trans_euler_step(
-                d_t, t_1, pred_trans_1, trans_t_1)
-            if trans_potential is not None:
-                with torch.inference_mode(False):
-                    grad_pred_trans_1 = pred_trans_1.clone().detach().requires_grad_(True)
-                    pred_trans_potential = autograd.grad(outputs=trans_potential(grad_pred_trans_1), inputs=grad_pred_trans_1)[0]
-                if self._trans_cfg.potential_t_scaling:
-                    trans_t_2 -= t_1 / (1 - t_1) * pred_trans_potential * d_t
-                else:
-                    trans_t_2 -= pred_trans_potential * d_t
             rotmats_t_2 = self._rots_euler_step(
                 d_t, t_1, pred_rotmats_1, rotmats_t_1)
+            
+            if self._relative_pep_trans:
+                loc_ca_ia1_wrt_n_ia1_t_2 = self._trans_euler_step(
+                    d_t, t_1, pred_loc_ca_ia1_wrt_n_ia1_1, loc_ca_ia1_wrt_n_ia1_t_1)
+                loc_ca_ia1_wrt_n_ia1_traj[-1] = loc_ca_ia1_wrt_n_ia1_t_2 # no append
+                trans_t_2 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(rotmats_t_2.transpose(0, 1), loc_ca_ia1_wrt_n_ia1_t_2.transpose(0, 1))[0].transpose(0, 1)
+                #trans_t_2 = trans_t_2 - trans_t_2.mean(dim=1, keepdim=True)
+                if trans_potential is not None: raise NotImplementedError('TODO.')
+
             if motif_scaffolding and not self._cfg.twisting.use:
-                trans_t_2 = _trans_diffuse_mask(trans_t_2, trans_1, diffuse_mask)
+                if self._relative_pep_trans:
+                    if not diffuse_mask.all(): raise NotImplementedError('TODO.')
+                else:
+                    trans_t_2 = _trans_diffuse_mask(trans_t_2, trans_1, diffuse_mask)
                 rotmats_t_2 = _rots_diffuse_mask(rotmats_t_2, rotmats_1, diffuse_mask)
 
             prot_traj.append((trans_t_2, rotmats_t_2))

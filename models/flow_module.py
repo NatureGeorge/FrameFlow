@@ -32,12 +32,13 @@ class FlowModule(LightningModule):
         self._data_cfg = cfg.data
         self._interpolant_cfg = cfg.interpolant
         self._bb_repr = cfg.bb_repr
+        self._relative_pep_trans = cfg.model.relative_pep_trans and (self._bb_repr == 'global_pep')
 
         # Set-up vector field prediction model
         self.model = FlowModel(cfg.model)
 
         # Set-up interpolant
-        self.interpolant = Interpolant(cfg.interpolant, self._bb_repr)
+        self.interpolant = Interpolant(cfg.interpolant, self._bb_repr, self._relative_pep_trans)
 
         self.validation_epoch_metrics = []
         self.validation_epoch_samples = []
@@ -107,8 +108,9 @@ class FlowModule(LightningModule):
         gt_trans_1 = noisy_batch['trans_1']
         gt_rotmats_1 = noisy_batch['rotmats_1']
         rotmats_t = noisy_batch['rotmats_t']
+        #if self._bb_repr != 'relative_pep':
         gt_rot_vf = so3_utils.calc_rot_vf(
-            rotmats_t, gt_rotmats_1.type(torch.float32))
+            rotmats_t, gt_rotmats_1.type(torch.float32), rotmat_repr=self._model_cfg.rot_repr_dim==9)
         if torch.any(torch.isnan(gt_rot_vf)):
             raise ValueError('NaN encountered in gt_rot_vf')
         if self._bb_repr == 'original':
@@ -125,9 +127,10 @@ class FlowModule(LightningModule):
         
         # Model output predictions.
         model_output = self.model(noisy_batch)
+        pred_loc_ca_ia1_wrt_n_ia1_1 = model_output['pred_loc_ca_ia1_wrt_n_ia1']
         pred_trans_1 = model_output['pred_trans']
         pred_rotmats_1 = model_output['pred_rotmats']
-        pred_rots_vf = so3_utils.calc_rot_vf(rotmats_t, pred_rotmats_1)
+        pred_rots_vf = so3_utils.calc_rot_vf(rotmats_t, pred_rotmats_1, rotmat_repr=self._model_cfg.rot_repr_dim==9)
         if torch.any(torch.isnan(pred_rots_vf)):
             raise ValueError('NaN encountered in pred_rots_vf')
 
@@ -136,6 +139,26 @@ class FlowModule(LightningModule):
             pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
         else:
             pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        
+        """
+        if self._bb_repr == 'relative_pep':
+            # NOTE: currently we do not handle the mask because there is no missing. When there is missing, the code should be changed.
+            
+            gt_trans_1 = noisy_batch['loc_ca_ia1_wrt_n_ia1_1'] # L
+            gt_rotmats_1 = gt_rotmats_1[:, :-1].transpose(-1, -2) @ gt_rotmats_1[:, 1:] # L
+            
+            # NOTE: gt_trans_1, gt_rotmats_1 add t_W and R_W
+            # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+            t_CoM_W = noisy_batch['trans_1'][loss_mask].mean(dim=1)
+            R_W = noisy_batch['rotmats_1'][:, 0]
+
+            gt_trans_1 = torch.cat((t_CoM_W, gt_trans_1), dim=1) # L+1
+            gt_rotmats_1 = torch.cat((R_W, gt_rotmats_1), dim=1) # L+1
+
+            gt_rot_vf = so3_utils.calc_rot_vf(rotmats_t, gt_rotmats_1.type(torch.float32), rotmat_repr=self._model_cfg.rot_repr_dim==9)
+            if torch.any(torch.isnan(gt_rot_vf)): raise ValueError('NaN encountered in gt_rot_vf')
+        """
+
         gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         loss_denom = torch.sum(loss_mask, dim=-1) * 3
@@ -146,11 +169,20 @@ class FlowModule(LightningModule):
         ) / _loss_denom
 
         # Translation VF loss
-        trans_error = (gt_trans_1 - pred_trans_1) / r3_norm_scale * training_cfg.trans_scale
-        trans_loss = training_cfg.translation_loss_weight * torch.sum(
-            trans_error ** 2 * loss_mask[..., None],
-            dim=(-1, -2)
-        ) / loss_denom
+        if self._relative_pep_trans:
+            assert pred_loc_ca_ia1_wrt_n_ia1_1 is not None
+            # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+            trans_error = (noisy_batch['loc_ca_ia1_wrt_n_ia1_1'] - pred_loc_ca_ia1_wrt_n_ia1_1) / r3_norm_scale * training_cfg.trans_scale
+            trans_loss = training_cfg.translation_loss_weight * torch.sum(
+                trans_error ** 2 * _loss_mask[..., None],
+                dim=(-1, -2)
+            ) / _loss_denom
+        else:
+            trans_error = (gt_trans_1 - pred_trans_1) / r3_norm_scale * training_cfg.trans_scale
+            trans_loss = training_cfg.translation_loss_weight * torch.sum(
+                trans_error ** 2 * loss_mask[..., None],
+                dim=(-1, -2)
+            ) / loss_denom
         trans_loss = torch.clamp(trans_loss, max=5)
 
         # Rotation VF loss
@@ -214,8 +246,8 @@ class FlowModule(LightningModule):
             num_batch,
             num_res,
             self.model,
-            trans_1=batch['trans_1'],
-            rotmats_1=batch['rotmats_1'],
+            trans_1=batch['trans_1'],# if self._bb_repr != 'relative_pep' else batch['loc_ca_ia1_wrt_n_ia1_1'],
+            rotmats_1=batch['rotmats_1'],# if self._bb_repr != 'relative_pep' else batch['rotmats_1'][:, :-1].transpose(-1, -2) @ batch['rotmats_1'][:, 1:],
             diffuse_mask=diffuse_mask,
             #chain_idx=batch['chain_idx'],
             res_idx=res_idx,
@@ -366,7 +398,7 @@ class FlowModule(LightningModule):
     def predict_step(self, batch, batch_idx):
         del batch_idx # Unused
         device = f'cuda:{torch.cuda.current_device()}'
-        interpolant = Interpolant(self._infer_cfg.interpolant, self._bb_repr) 
+        interpolant = Interpolant(self._infer_cfg.interpolant, self._bb_repr, self._relative_pep_trans) 
         interpolant.set_device(device)
 
         sample_ids = batch['sample_id'].squeeze().tolist()
@@ -375,8 +407,8 @@ class FlowModule(LightningModule):
 
         if 'diffuse_mask' in batch: # motif-scaffolding
             target = batch['target'][0]
-            trans_1 = batch['trans_1']
-            rotmats_1 = batch['rotmats_1']
+            trans_1 = batch['trans_1']# if self._bb_repr != 'relative_pep' else batch['loc_ca_ia1_wrt_n_ia1_1']
+            rotmats_1 = batch['rotmats_1']# if self._bb_repr != 'relative_pep' else batch['rotmats_1'][:, :-1].transpose(-1, -2) @ batch['rotmats_1'][:, 1:]
             diffuse_mask = batch['diffuse_mask']
             if self._bb_repr == 'original':
                 true_bb_pos = all_atom.atom37_from_trans_rot(trans_1, rotmats_1, 1 - diffuse_mask)

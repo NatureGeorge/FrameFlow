@@ -40,7 +40,7 @@ class FlowModel(nn.Module):
             self.trunk[f'node_transition_{b}'] = ipa_pytorch.StructureModuleTransition(
                 c=self._ipa_conf.c_s)
             self.trunk[f'bb_update_{b}'] = ipa_pytorch.BackboneUpdate(
-                self._ipa_conf.c_s, use_rot_updates=True)
+                self._ipa_conf.c_s, use_rot_updates=True, rot_repr_dim=self._model_conf.rot_repr_dim)
 
             if b < self._ipa_conf.num_blocks-1:
                 # No edge update on the last block.
@@ -102,19 +102,32 @@ class FlowModel(nn.Module):
             node_embed = node_embed + self.trunk[f'post_tfmr_{b}'](seq_tfmr_out)
             node_embed = self.trunk[f'node_transition_{b}'](node_embed)
             node_embed = node_embed * node_mask[..., None]
+
             rigid_update = self.trunk[f'bb_update_{b}'](
                 node_embed * node_mask[..., None])
-            curr_rigids = curr_rigids.compose_q_update_vec(
-                rigid_update, (node_mask * diffuse_mask)[..., None])
+            
+            # NOTE: The predicted features (e.g. rotations and translations) are being updated iteratively, as well as the input frames, originally without `stop_rot_gradient`.
+            if self._model_conf.rot_repr_dim == 3:
+                curr_rigids = curr_rigids.compose_q_update_vec(
+                    rigid_update, self._model_conf.relative_pep_trans, (node_mask * diffuse_mask)[..., None], node_mask[..., None])
+            else:
+                curr_rigids = curr_rigids.compose_r9svd_update_vec(
+                    rigid_update, self._model_conf.relative_pep_trans, (node_mask * diffuse_mask)[..., None], node_mask[..., None])
+            
             if b < self._ipa_conf.num_blocks-1:
                 edge_embed = self.trunk[f'edge_transition_{b}'](
                     node_embed, edge_embed)
                 edge_embed *= edge_mask[..., None]
+            
+                #if self._ipa_conf.stop_rot_gradient:
+                #    curr_rigids = curr_rigids.stop_rot_gradient()
 
         curr_rigids = self.rigids_nm_to_ang(curr_rigids)
         pred_trans = curr_rigids.get_trans()
         pred_rotmats = curr_rigids.get_rots().get_rot_mats()
+        pred_loc_ca_ia1_wrt_n_ia1 = curr_rigids._loc_ca_ia1_wrt_n_ia1 if self._model_conf.relative_pep_trans else None
         return {
             'pred_trans': pred_trans,
             'pred_rotmats': pred_rotmats,
+            'pred_loc_ca_ia1_wrt_n_ia1': pred_loc_ca_ia1_wrt_n_ia1
         }

@@ -19,6 +19,8 @@ model:
     self_condition: True
     embed_chain: False
     embed_diffuse_mask: True
+  rot_repr_dim: 3
+  relative_pep_trans: False
   ipa:
     c_s: ${model.node_embed_size}
     c_z: ${model.edge_embed_size}

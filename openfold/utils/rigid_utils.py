@@ -17,7 +17,8 @@ from typing import Tuple, Any, Sequence, Callable, Optional
 
 import numpy as np
 import torch
-
+import roma
+import folddof
 
 def rot_matmul(
     a: torch.Tensor, 
@@ -584,6 +585,72 @@ class Rotation:
 
     # Rotation functions
 
+    def compose_r9svd_update_vec(self, 
+        r9_update_vec: torch.Tensor, 
+        update_mask: torch.Tensor = None,
+    ):
+        """
+            Returns a new Rotation matrix after updating the current
+            object's underlying rotation with a rotation matrix update, formatted
+            as a flatten [*, 9] tensor.
+
+            Args:
+                r9_update_vec:
+                    A [*, 9] rotation update tensor
+            Returns:
+                An updated Rotation
+        """
+        batch_shape = r9_update_vec.shape[:-1]
+        rot_mats = self.get_rot_mats()
+        rot_mats_update = roma.special_procrustes(r9_update_vec.reshape(batch_shape + (3, 3)))
+        if update_mask is not None:
+            I = identity_rot_mats(batch_shape, dtype=rot_mats_update.dtype, device=rot_mats_update.device)
+            rot_mats_update = torch.where(update_mask.to(dtype=torch.bool).unsqueeze(-1), rot_mats_update, I)
+        new_rot_mats = rot_mats @ rot_mats_update # TODO: check
+        
+        return Rotation(
+            rot_mats=new_rot_mats, 
+            quats=None, 
+        )
+
+    '''
+    def compose_q_relative_update_vec(self, 
+        q_update_vec: torch.Tensor, 
+        normalize_quats: bool = False,
+        update_mask: torch.Tensor = None,
+    ):
+        """
+            Returns a new quaternion Rotation after updating the current
+            object's underlying rotation with a quaternion update, formatted
+            as a [*, 3] tensor whose final three columns represent x, y, z such 
+            that (1, x, y, z) is the desired (not necessarily unit) quaternion
+            update.
+
+            Args:
+                q_update_vec:
+                    A [*, 3] quaternion update tensor
+                normalize_quats:
+                    Whether to normalize the output quaternion
+            Returns:
+                An updated Rotation
+        """
+        quats = self.get_quats()
+        r_quats = torch.cat((quats[:, 0], quat_multiply(invert_quat(quats[:, :-1]), quats[:, 1:])), dim=1) # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+        r_quat_update = quat_multiply_by_vec(r_quats, q_update_vec)
+        if update_mask is not None:
+            r_quat_update = r_quat_update * update_mask
+        
+        new_r_quats = torch.nn.functional.normalize(r_quats + r_quat_update, dim=-1)
+
+        new_quats = folddof.utils.quat_cumprod(new_r_quats.transpose(0, 1), add_head=False).transpose(0, 1)
+
+        return Rotation(
+            rot_mats=None, 
+            quats=new_quats, 
+            normalize_quats=normalize_quats,
+        )
+    '''
+
     def compose_q_update_vec(self, 
         q_update_vec: torch.Tensor, 
         normalize_quats: bool = True,
@@ -608,6 +675,7 @@ class Rotation:
         quat_update = quat_multiply_by_vec(quats, q_update_vec)
         if update_mask is not None:
             quat_update = quat_update * update_mask
+        # NOTE: Nlerp (t=0.5) to make the rotation update 'smooth' (suitable for small rotation difference) (but does not handle the sign problem)
         new_quats = quats + quat_update
         return Rotation(
             rot_mats=None, 
@@ -1036,9 +1104,40 @@ class Rigid:
         """
         return self._trans
 
+    def compose_r9svd_update_vec(self, 
+        r_update_vec: torch.Tensor,
+        relative_pep_trans: bool = False,
+        update_mask: torch.Tensor=None,
+        node_mask: torch.Tensor = None,
+    ):
+        """
+            Composes the transformation with a rotation-translation update vector of
+            shape [*, 12], where the final 12 columns represent the flatten 3D rotation matrix followed by a 3D
+            translation.
+
+            Args:
+                r_update_vec: The rotation-translation update vector.
+            Returns:
+                The composed transformation.
+        """
+        r9_vec, t_vec = r_update_vec[..., :9], r_update_vec[..., 9:] # [..., 3:] somehow able to make the model fit the rotation -_-||| -> [..., :9] not receiving gradients?
+        new_rots = self._rots.compose_r9svd_update_vec(
+            r9_vec, update_mask=update_mask)
+        
+        if relative_pep_trans: raise NotImplementedError()
+
+        trans_update = self._rots.apply(t_vec) # NOTE: this indicates that the t_vec is local coordinate
+        if update_mask is not None:
+            trans_update = trans_update * update_mask
+        new_translation = self._trans + trans_update
+
+        return Rigid(new_rots, new_translation)
+
     def compose_q_update_vec(self, 
         q_update_vec: torch.Tensor,
+        relative_pep_trans: bool = False,
         update_mask: torch.Tensor=None,
+        node_mask: torch.Tensor = None,
     ):
         """
             Composes the transformation with a quaternion update vector of
@@ -1055,12 +1154,36 @@ class Rigid:
         new_rots = self._rots.compose_q_update_vec(
             q_vec, update_mask=update_mask)
 
-        trans_update = self._rots.apply(t_vec)
-        if update_mask is not None:
-            trans_update = trans_update * update_mask
-        new_translation = self._trans + trans_update
+        if relative_pep_trans:
+            # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+            # NOTE: currently has no interaction with self._trans # TODO: check validity
+            # NOTE: it seems that even if the new_translation is wrong, the model can still perform good inference?
+            new_translation = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori(
+                    new_rots._quats.roll(-1, -1).transpose(0, 1), 
+                    t_vec[:, 1:].transpose(0, 1) * 10, 
+                    #update_mask.transpose(0, 1) if update_mask is not None else None, 
+                    #self._trans.transpose(0, 1),
+                )[0].transpose(0, 1) * 0.1
+            # t_W = self._trans[:, [0]] + self._rots[:, [0]].apply(t_vec[:, [0]]) # TODO: it should be the CoM ?
+            
+            if node_mask is not None:
+                assert torch.allclose(update_mask, node_mask), 'TODO.'
+                #new_translation = new_translation - ((new_translation * node_mask).sum(dim=1) / torch.clamp(node_mask.sum(dim=1), min=1.0)).unsqueeze(1)
+            else:
+                if update_mask is not None:
+                    assert update_mask.all(), 'TODO.'
+                #new_translation = new_translation - new_translation.mean(dim=1, keepdim=True)
+            
+            ret = Rigid(new_rots, new_translation)
+            ret._loc_ca_ia1_wrt_n_ia1 = t_vec[:, 1:] # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
+            return ret
+        else:
+            trans_update = self._rots.apply(t_vec) # NOTE: this indicates that the t_vec is local coordinate
+            if update_mask is not None:
+                trans_update = trans_update * update_mask
+            new_translation = self._trans + trans_update
 
-        return Rigid(new_rots, new_translation)
+            return Rigid(new_rots, new_translation)
 
     def compose_tran_update_vec(self, 
         t_vec: torch.Tensor,
@@ -1360,7 +1483,10 @@ class Rigid:
             Returns:
                 A transformation object with a transformed translation.
         """
-        return Rigid(self._rots, fn(self._trans))
+        ret = Rigid(self._rots, fn(self._trans))
+        if hasattr(self, '_loc_ca_ia1_wrt_n_ia1'):
+            ret._loc_ca_ia1_wrt_n_ia1 = fn(self._loc_ca_ia1_wrt_n_ia1)
+        return ret
 
     def scale_translation(self, trans_scale_factor: float):
         """

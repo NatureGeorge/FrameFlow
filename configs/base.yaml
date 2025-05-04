@@ -32,6 +32,7 @@ interpolant:
     corrupt: True
     sample_schedule: exp
     exp_rate: 10
+    slerp: False
 
   trans:
     corrupt: True

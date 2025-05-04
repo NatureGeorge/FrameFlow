@@ -143,15 +143,16 @@ def _process_csv_row_for_global_pep(processed_file_path):
         
         # Re-number residue indices for each chain such that it starts from 1.
         new_res_idx = np.arange(1, obs_author_residue_number.shape[0]+2) # obs_author_residue_number - obs_author_residue_number[0] + 1
-        aatype = torch.tensor(processed_feats['aatype'][use_mask]).long()
+        # aatype = torch.tensor(processed_feats['aatype'][use_mask]).long()
         
         bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order]).to(dtype=torch.float)
         bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order]).to(dtype=torch.bool)
-        rotmats_1, trans_1, _, pep_mask_1, _ = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1))
+        rotmats_1, trans_1, loc_ca_ia1_wrt_n_ia1_1, pep_mask_1, loc_ca_ia1_wrt_n_ia1_mask_1 = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1))
         #rotmats_1 = rotmats_1.numpy(); trans_1 = trans_1.numpy(); pep_mask_1 = pep_mask_1.numpy()
         #res_plddt = processed_feats['b_factors'][use_mask][:, 1]
 
         assert pep_mask_1.all(), f"Tempoary discard chains with missing pep frames. (from: {processed_file_path})"
+        assert loc_ca_ia1_wrt_n_ia1_mask_1.all(), f"Tempoary discard chains with missing loc_ca_ia1_wrt_n_ia1. (from: {processed_file_path})"
         
         # Shuffle chain_index
         # ...
@@ -164,12 +165,13 @@ def _process_csv_row_for_global_pep(processed_file_path):
     return {
         #'res_plddt': res_plddt,
         #'aatype': aatype,
-        'rotmats_1': rotmats_1,
-        'trans_1': trans_1,
-        'res_mask': pep_mask_1.int(),
-        '_res_mask': pep_mask_1[1:].int(),
+        'rotmats_1': rotmats_1, # L+1
+        'trans_1': trans_1, # L+1
+        'res_mask': pep_mask_1.int(), # L+1
+        '_res_mask': pep_mask_1[1:].int(), # L
+        'loc_ca_ia1_wrt_n_ia1_1': loc_ca_ia1_wrt_n_ia1_1, # L
         #'chain_idx': new_chain_idx,
-        'res_idx': new_res_idx,
+        'res_idx': new_res_idx, # L+1
     }
 
 
