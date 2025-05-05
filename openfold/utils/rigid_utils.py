@@ -1159,11 +1159,13 @@ class Rigid:
             # NOTE: currently has no interaction with self._trans # TODO: check validity
             # NOTE: it seems that even if the new_translation is wrong, the model can still perform good inference?
             new_translation = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori(
-                    new_rots._quats.roll(-1, -1).transpose(0, 1), 
-                    t_vec[:, 1:].transpose(0, 1) * 10, 
-                    #update_mask.transpose(0, 1) if update_mask is not None else None, 
-                    #self._trans.transpose(0, 1),
-                )[0].transpose(0, 1) * 0.1
+                    new_rots._quats.roll(-1, -1), 
+                    t_vec[:, 1:] * 10, 
+                    dim=1,
+                    rot_repr_is_q=True,
+                    #update_mask if update_mask is not None else None, 
+                    #self._trans,
+                )[0] * 0.1
             # t_W = self._trans[:, [0]] + self._rots[:, [0]].apply(t_vec[:, [0]]) # TODO: it should be the CoM ?
             
             if node_mask is not None:

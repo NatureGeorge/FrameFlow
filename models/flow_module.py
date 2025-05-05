@@ -113,10 +113,6 @@ class FlowModule(LightningModule):
             rotmats_t, gt_rotmats_1.type(torch.float32), rotmat_repr=self._model_cfg.rot_repr_dim==9)
         if torch.any(torch.isnan(gt_rot_vf)):
             raise ValueError('NaN encountered in gt_rot_vf')
-        if self._bb_repr == 'original':
-            gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
-        else:
-            gt_bb_atoms = all_atom.to_backbone_via_pep(gt_trans_1, gt_rotmats_1)[:, :, :3]
         # Timestep used for normalization.
         r3_t = noisy_batch['r3_t']
         so3_t = noisy_batch['so3_t']
@@ -134,39 +130,24 @@ class FlowModule(LightningModule):
         if torch.any(torch.isnan(pred_rots_vf)):
             raise ValueError('NaN encountered in pred_rots_vf')
 
-        # Backbone atom loss
-        if self._bb_repr == 'original':
-            pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
-        else:
-            pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
-        
-        """
-        if self._bb_repr == 'relative_pep':
-            # NOTE: currently we do not handle the mask because there is no missing. When there is missing, the code should be changed.
-            
-            gt_trans_1 = noisy_batch['loc_ca_ia1_wrt_n_ia1_1'] # L
-            gt_rotmats_1 = gt_rotmats_1[:, :-1].transpose(-1, -2) @ gt_rotmats_1[:, 1:] # L
-            
-            # NOTE: gt_trans_1, gt_rotmats_1 add t_W and R_W
-            # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
-            t_CoM_W = noisy_batch['trans_1'][loss_mask].mean(dim=1)
-            R_W = noisy_batch['rotmats_1'][:, 0]
-
-            gt_trans_1 = torch.cat((t_CoM_W, gt_trans_1), dim=1) # L+1
-            gt_rotmats_1 = torch.cat((R_W, gt_rotmats_1), dim=1) # L+1
-
-            gt_rot_vf = so3_utils.calc_rot_vf(rotmats_t, gt_rotmats_1.type(torch.float32), rotmat_repr=self._model_cfg.rot_repr_dim==9)
-            if torch.any(torch.isnan(gt_rot_vf)): raise ValueError('NaN encountered in gt_rot_vf')
-        """
-
-        gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
-        pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
         loss_denom = torch.sum(loss_mask, dim=-1) * 3
         _loss_denom = torch.sum(_loss_mask, dim=-1) * 3
-        bb_atom_loss = torch.sum(
-            (gt_bb_atoms - pred_bb_atoms) ** 2 * _loss_mask[..., None, None],
-            dim=(-1, -2, -3)
-        ) / _loss_denom
+
+        if self._exp_cfg.training.aux_loss_weight > 0:
+            # Backbone atom loss
+            if self._bb_repr == 'original':
+                gt_bb_atoms = all_atom.to_atom37(gt_trans_1, gt_rotmats_1)[:, :, :3] 
+                pred_bb_atoms = all_atom.to_atom37(pred_trans_1, pred_rotmats_1)[:, :, :3]
+            else:
+                gt_bb_atoms = all_atom.to_backbone_via_pep(gt_trans_1, gt_rotmats_1)[:, :, :3]
+                pred_bb_atoms = all_atom.to_backbone_via_pep(pred_trans_1, pred_rotmats_1)[:, :, :3]
+        
+            gt_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
+            pred_bb_atoms *= training_cfg.bb_atom_scale / r3_norm_scale[..., None]
+            bb_atom_loss = torch.sum(
+                (gt_bb_atoms - pred_bb_atoms) ** 2 * _loss_mask[..., None, None],
+                dim=(-1, -2, -3)
+            ) / _loss_denom
 
         # Translation VF loss
         if self._relative_pep_trans:
@@ -192,40 +173,44 @@ class FlowModule(LightningModule):
             dim=(-1, -2)
         ) / loss_denom
 
-        # Pairwise distance loss
-        gt_flat_atoms = gt_bb_atoms.reshape([num_batch, num_res*3, 3])
-        gt_pair_dists = torch.linalg.norm(
-            gt_flat_atoms[:, :, None, :] - gt_flat_atoms[:, None, :, :], dim=-1)
-        pred_flat_atoms = pred_bb_atoms.reshape([num_batch, num_res*3, 3])
-        pred_pair_dists = torch.linalg.norm(
-            pred_flat_atoms[:, :, None, :] - pred_flat_atoms[:, None, :, :], dim=-1)
+        if self._exp_cfg.training.aux_loss_weight > 0:
 
-        flat_loss_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
-        flat_loss_mask = flat_loss_mask.reshape([num_batch, num_res*3])
-        flat_res_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
-        flat_res_mask = flat_res_mask.reshape([num_batch, num_res*3])
+            # Pairwise distance loss
+            gt_flat_atoms = gt_bb_atoms.reshape([num_batch, num_res*3, 3])
+            gt_pair_dists = torch.linalg.norm(
+                gt_flat_atoms[:, :, None, :] - gt_flat_atoms[:, None, :, :], dim=-1)
+            pred_flat_atoms = pred_bb_atoms.reshape([num_batch, num_res*3, 3])
+            pred_pair_dists = torch.linalg.norm(
+                pred_flat_atoms[:, :, None, :] - pred_flat_atoms[:, None, :, :], dim=-1)
 
-        gt_pair_dists = gt_pair_dists * flat_loss_mask[..., None]
-        pred_pair_dists = pred_pair_dists * flat_loss_mask[..., None]
-        pair_dist_mask = flat_loss_mask[..., None] * flat_res_mask[:, None, :]
+            flat_loss_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
+            flat_loss_mask = flat_loss_mask.reshape([num_batch, num_res*3])
+            flat_res_mask = torch.tile(_loss_mask[:, :, None], (1, 1, 3))
+            flat_res_mask = flat_res_mask.reshape([num_batch, num_res*3])
 
-        dist_mat_loss = torch.sum(
-            (gt_pair_dists - pred_pair_dists)**2 * pair_dist_mask,
-            dim=(1, 2))
-        dist_mat_loss /= (torch.sum(pair_dist_mask, dim=(1, 2)) + 1)
+            gt_pair_dists = gt_pair_dists * flat_loss_mask[..., None]
+            pred_pair_dists = pred_pair_dists * flat_loss_mask[..., None]
+            pair_dist_mask = flat_loss_mask[..., None] * flat_res_mask[:, None, :]
 
+            dist_mat_loss = torch.sum(
+                (gt_pair_dists - pred_pair_dists)**2 * pair_dist_mask,
+                dim=(1, 2))
+            dist_mat_loss /= (torch.sum(pair_dist_mask, dim=(1, 2)) + 1)
+
+            auxiliary_loss = (
+                bb_atom_loss * training_cfg.aux_loss_use_bb_loss
+                + dist_mat_loss * training_cfg.aux_loss_use_pair_loss
+            )
+            auxiliary_loss *= (
+                (r3_t[:, 0] > training_cfg.aux_loss_t_pass)
+                & (so3_t[:, 0] > training_cfg.aux_loss_t_pass)
+            )
+            auxiliary_loss *= self._exp_cfg.training.aux_loss_weight
+            auxiliary_loss = torch.clamp(auxiliary_loss, max=5)
+        else:
+            auxiliary_loss = torch.zeros_like(trans_loss)
+        
         se3_vf_loss = trans_loss + rots_vf_loss
-        auxiliary_loss = (
-            bb_atom_loss * training_cfg.aux_loss_use_bb_loss
-            + dist_mat_loss * training_cfg.aux_loss_use_pair_loss
-        )
-        auxiliary_loss *= (
-            (r3_t[:, 0] > training_cfg.aux_loss_t_pass)
-            & (so3_t[:, 0] > training_cfg.aux_loss_t_pass)
-        )
-        auxiliary_loss *= self._exp_cfg.training.aux_loss_weight
-        auxiliary_loss = torch.clamp(auxiliary_loss, max=5)
-
         se3_vf_loss += auxiliary_loss
         if torch.any(torch.isnan(se3_vf_loss)):
             raise ValueError('NaN loss encountered')

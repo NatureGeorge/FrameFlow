@@ -134,10 +134,12 @@ class Interpolant:
             loc_ca_ia1_wrt_n_ia1_1 = batch['loc_ca_ia1_wrt_n_ia1_1']
             loc_ca_ia1_wrt_n_ia1_t = self._corrupt_trans(
                 loc_ca_ia1_wrt_n_ia1_1, r3_t, batch['_res_mask'], diffuse_mask[:, 1:], re_scale=0.1)
-            trans_t = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(
-                    rotmats_t.transpose(0, 1), 
-                    loc_ca_ia1_wrt_n_ia1_t.transpose(0, 1), 
-                )[0].transpose(0, 1)
+            trans_t = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori(
+                    rotmats_t, 
+                    loc_ca_ia1_wrt_n_ia1_t, 
+                    dim=1,
+                    rot_repr_is_q=False,
+                )[0]
             #node_mask = res_mask[..., None]
             #trans_t = trans_t - ((trans_t * node_mask).sum(dim=1) / torch.clamp(node_mask.sum(dim=1), min=1.0)).unsqueeze(1)
         
@@ -207,8 +209,8 @@ class Interpolant:
                 num_batch, num_res, self._device) * du.NM_TO_ANG_SCALE
             if self._relative_pep_trans:
                 # NOTE: currently there is only monomer. When it comes to multimer, the code should be changed.
-                loc_ca_ia1_wrt_n_ia1_0 = (trans_0[:, 1:] / (du.NM_TO_ANG_SCALE * 100)) + (torch.tensor(folddof.data.DEF_LOC['ca_ia1_is_trans'], dtype=trans_0.dtype, device=trans_0.device) - torch.tensor(folddof.data.DEF_LOC['n_ia1'], dtype=trans_0.dtype, device=trans_0.device))
-                trans_0 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(rotmats_0.transpose(0, 1), loc_ca_ia1_wrt_n_ia1_0.transpose(0, 1))[0].transpose(0, 1)
+                loc_ca_ia1_wrt_n_ia1_0 = (trans_0[:, 1:] * 0.1) + (torch.tensor(folddof.data.DEF_LOC['ca_ia1_is_trans'], dtype=trans_0.dtype, device=trans_0.device) - torch.tensor(folddof.data.DEF_LOC['n_ia1'], dtype=trans_0.dtype, device=trans_0.device))
+                trans_0 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori(rotmats_0, loc_ca_ia1_wrt_n_ia1_0, dim=1, rot_repr_is_q=False)[0]
                 #trans_0 = trans_0 - trans_0.mean(dim=1, keepdim=True)
             else:
                 loc_ca_ia1_wrt_n_ia1_0 = None
@@ -337,7 +339,7 @@ class Interpolant:
                 loc_ca_ia1_wrt_n_ia1_t_2 = self._trans_euler_step(
                     d_t, t_1, pred_loc_ca_ia1_wrt_n_ia1_1, loc_ca_ia1_wrt_n_ia1_t_1)
                 loc_ca_ia1_wrt_n_ia1_traj[-1] = loc_ca_ia1_wrt_n_ia1_t_2 # no append
-                trans_t_2 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori_via_rotmat(rotmats_t_2.transpose(0, 1), loc_ca_ia1_wrt_n_ia1_t_2.transpose(0, 1))[0].transpose(0, 1)
+                trans_t_2 = folddof.frame.PeptideUnitFrame.to_W_batch_avg_ori(rotmats_t_2, loc_ca_ia1_wrt_n_ia1_t_2, dim=1, rot_repr_is_q=False)[0]
                 #trans_t_2 = trans_t_2 - trans_t_2.mean(dim=1, keepdim=True)
                 if trans_potential is not None: raise NotImplementedError('TODO.')
 
