@@ -175,18 +175,20 @@ def get_sampled_mask(contigs, length, rng=None, num_tries=1000000):
     return sampled_mask, sampled_mask_length, inpaint_chains
 
 
-def dataset_creation(dataset_class, cfg, task, bb_repr):
+def dataset_creation(dataset_class, cfg, task, bb_repr, rot_repr_is_q):
     train_dataset = dataset_class(
         dataset_cfg=cfg,
         task=task,
         is_training=True,
         bb_repr=bb_repr,
+        rot_repr_is_q=rot_repr_is_q,
     ) 
     eval_dataset = dataset_class(
         dataset_cfg=cfg,
         task=task,
         is_training=False,
         bb_repr=bb_repr,
+        rot_repr_is_q=rot_repr_is_q,
     ) 
     return train_dataset, eval_dataset
 

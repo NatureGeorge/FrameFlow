@@ -3,7 +3,7 @@ import mdtraj as md
 import numpy as np
 from openfold.np import residue_constants
 from tmtools import tm_align
-
+from data import utils as du
 
 def calc_tm_score(pos_1, pos_2, seq_1, seq_2):
     tm_results = tm_align(pos_1, pos_2, seq_1, seq_2)
@@ -48,3 +48,15 @@ def calc_ca_ca_metrics(ca_pos, bond_tol=0.1, clash_tol=1.0):
         'ca_ca_valid_percent': ca_ca_valid,
         'num_ca_ca_clashes': np.sum(clashes),
     }
+
+
+def calc_aligned_rmsd(pos_1, pos_2):
+    '''
+    NOTE: https://github.com/jasonkyuyim/se3_diffusion/issues/40
+
+    thus this function would return both the mad and rmsd for reference
+    '''
+    aligned_pos_1 = du.rigid_transform_3D(pos_1, pos_2)[0]
+    diff = np.linalg.norm(aligned_pos_1 - pos_2, axis=-1)
+    return np.mean(diff), np.sqrt(np.mean(diff ** 2))
+

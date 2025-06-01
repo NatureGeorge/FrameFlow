@@ -59,6 +59,8 @@ class EvalRunner:
         self._flow_module.eval()
         self._flow_module._infer_cfg = self._infer_cfg
         self._flow_module._samples_cfg = self._samples_cfg
+        self._flow_module.infer_setup()
+        self._flow_module._rng = self._rng
 
     @property
     def inference_dir(self):

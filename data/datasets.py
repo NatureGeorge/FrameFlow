@@ -112,7 +112,7 @@ def _process_csv_row(processed_file_path):
     }
 
 
-def _process_csv_row_for_global_pep(processed_file_path):
+def _process_csv_row_for_global_pep(processed_file_path, rot_repr_is_q: bool = False):
     processed_feats = du.read_pkl(processed_file_path)
     chain_idx = processed_feats['chain_index']
     res_idx = processed_feats['residue_index']
@@ -147,7 +147,7 @@ def _process_csv_row_for_global_pep(processed_file_path):
         
         bb_coords = torch.from_numpy(processed_feats['atom_positions'][use_mask][:, atom_order]).to(dtype=torch.float)
         bb_mask = torch.from_numpy(processed_feats['atom_mask'][use_mask][:, atom_order]).to(dtype=torch.bool)
-        rotmats_1, trans_1, loc_ca_ia1_wrt_n_ia1_1, pep_mask_1, loc_ca_ia1_wrt_n_ia1_mask_1 = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1))
+        rotmats_1, trans_1, loc_ca_ia1_wrt_n_ia1_1, pep_mask_1, loc_ca_ia1_wrt_n_ia1_mask_1 = to_rottrans(bb_coords.transpose(0, 1), bb_mask.transpose(0, 1), rot_repr_is_q=rot_repr_is_q)
         #rotmats_1 = rotmats_1.numpy(); trans_1 = trans_1.numpy(); pep_mask_1 = pep_mask_1.numpy()
         #res_plddt = processed_feats['b_factors'][use_mask][:, 1]
 
@@ -170,6 +170,7 @@ def _process_csv_row_for_global_pep(processed_file_path):
         'res_mask': pep_mask_1.int(), # L+1
         '_res_mask': pep_mask_1[1:].int(), # L
         'loc_ca_ia1_wrt_n_ia1_1': loc_ca_ia1_wrt_n_ia1_1, # L
+        #'is_trans': PeptideUnitFrame.whether_is_trans(loc_ca_ia1_wrt_n_ia1_1),
         #'chain_idx': new_chain_idx,
         'res_idx': new_res_idx, # L+1
     }
@@ -198,11 +199,13 @@ class BaseDataset(Dataset):
             is_training,
             task,
             bb_repr,
+            rot_repr_is_q,
         ):
         self._log = logging.getLogger(__name__)
         self._is_training = is_training
         self._dataset_cfg = dataset_cfg
         self._bb_repr = bb_repr
+        self._rot_repr_is_q = rot_repr_is_q
         self.task = task
         self.raw_csv = pd.read_csv(self.dataset_cfg.csv_path)
         metadata_csv = self._filter_metadata(self.raw_csv)
@@ -269,7 +272,7 @@ class BaseDataset(Dataset):
         if self._bb_repr == 'original':
             processed_row = _process_csv_row(path)
         else:
-            processed_row = _process_csv_row_for_global_pep(path)
+            processed_row = _process_csv_row_for_global_pep(path, rot_repr_is_q=self._rot_repr_is_q)
         if use_cache:
             self._cache[path] = processed_row
         return processed_row
