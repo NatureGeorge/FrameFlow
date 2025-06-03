@@ -21,14 +21,18 @@ data:
     max_num_res_squared: 400_000
 
 bb_repr: original
+rot_repr_is_q: False
 
 interpolant:
+  yield_full_traj: False
+
   min_t: 1e-2
 
   twisting:
     use: False
 
   rots:
+    rot_repr_is_q: ${rot_repr_is_q}
     corrupt: True
     sample_schedule: exp
     exp_rate: 10
@@ -36,6 +40,11 @@ interpolant:
 
   trans:
     corrupt: True
+    override_pep_iso: ${model.override_pep_iso}
+    sample_cis_loc: False
+    keep_true_pep_iso: False # only for training
+    relative_pep_trans_re_scale: 0.1
+    relative_pep_trans_clamp_sigma: -1
     batch_ot: True
     sample_schedule: linear
     sample_temp: 1.0
@@ -53,6 +62,8 @@ interpolant:
 
   self_condition: ${model.edge_features.self_condition}
 
+ckpt_path: null
+
 experiment:
   debug: False
   seed: 123
@@ -64,12 +75,15 @@ experiment:
     bb_atom_scale: 0.1
     trans_scale: 0.1
     translation_loss_weight: 2.0
+    pep_trans_loss_weight: 1.0
+    relative_pep_trans_loss_weight: 1.0
     t_normalize_clip: 0.9
     rotation_loss_weights: 1.0
     aux_loss_weight: 0.0
     aux_loss_use_bb_loss: True
     aux_loss_use_pair_loss: True
     aux_loss_t_pass: 0.5
+  enable_wandb: False
   wandb:
     name: ${data.task}_${data.dataset}
     project: se3-fm
@@ -91,5 +105,7 @@ experiment:
     save_top_k: 3
     monitor: valid/non_coil_percent
     mode: max
+    save_weights_only: True
+    #filename: epoch={epoch}-step={step}-valid_score={valid/pseudo_score:.3f}
   # Keep this null. Will be populated at runtime.
   inference_dir: null

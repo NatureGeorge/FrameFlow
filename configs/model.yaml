@@ -9,6 +9,8 @@ model:
     max_num_res: 2000
     timestep_int: 1000
     embed_chain: False
+    #embed_pep_iso: False
+    #c_pep_iso_emb: 64
   edge_features:
     single_bias_transition_n: 2
     c_s: ${model.node_embed_size}
@@ -19,8 +21,11 @@ model:
     self_condition: True
     embed_chain: False
     embed_diffuse_mask: True
-  rot_repr_dim: 3
+  rot_repr_dim: 3  # TO BE DISCARDED
   relative_pep_trans: False
+  relative_pep_trans_update: False
+  free_trans: False
+  override_pep_iso: False
   ipa:
     c_s: ${model.node_embed_size}
     c_z: ${model.edge_embed_size}

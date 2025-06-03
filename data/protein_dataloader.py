@@ -155,4 +155,4 @@ class LengthBatcher:
         return iter(self.sample_order)
 
     def __len__(self):
-        return len(self.sample_order)
+        return self._num_batches #len(self.sample_order)

@@ -10,6 +10,9 @@ inference:
   predict_dir: ./inference_outputs/
   inference_subdir: run_${now:%Y-%m-%d}_${now:%H-%M-%S}
 
+  esmfold_v1_dir: ./esmfold_v1
+  pmpnn_dir: ./ProteinMPNN
+
   # Use this to write with date-time stamp.
   name: run_${now:%Y-%m-%d}_${now:%H-%M}
   seed: 123
@@ -23,14 +26,21 @@ inference:
   num_gpus: 2
 
   interpolant:
+    yield_full_traj: False
     min_t: 1e-2
     rots:
+      rot_repr_is_q: ${rot_repr_is_q}
       corrupt: True
       sample_schedule: exp
       exp_rate: 10
       slerp: False
     trans:
       corrupt: True
+      override_pep_iso: ${model.override_pep_iso}
+      sample_cis_loc: False
+      #keep_true_pep_iso: False
+      relative_pep_trans_re_scale: 0.1
+      relative_pep_trans_clamp_sigma: -1
       sample_schedule: linear
     sampling:
       num_timesteps: 100
@@ -82,6 +92,8 @@ inference:
 
     # Number of scaffolds to sample per target.
     samples_per_target: 100
+
+    seq_per_sample: 0
 
     # Batch size when sampling from the model
     num_batch: 1
